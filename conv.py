@@ -9,15 +9,34 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.modules.conv import _ConvNd
 from torch.nn.modules.utils import _pair
+from collections import OrderedDict
+from timm.models.layers import DropPath
 
-__all__ = ('Conv', 'Conv2', 'LightConv', 'DWConv', 'DWConvTranspose2d', 'ConvTranspose', 'Focus', 'GhostConv',
-           'ChannelAttention', 'SpatialAttention', 'CBAM', 'Concat', 'RepConv')
+from torch import Tensor
+
+__all__ = (
+    "Conv",
+    "Conv2",
+    "LightConv",
+    "DWConv",
+    "DWConvTranspose2d",
+    "ConvTranspose",
+    "Focus",
+    "GhostConv",
+    "ChannelAttention",
+    "SpatialAttention",
+    "CBAM",
+    "Concat",
+    "RepConv",
+)
 
 
 def autopad(k, p=None, d=1):  # kernel, padding, dilation
     """Pad to 'same' shape outputs."""
     if d > 1:
-        k = d * (k - 1) + 1 if isinstance(k, int) else [d * (x - 1) + 1 for x in k]  # actual kernel-size
+        k = (
+            d * (k - 1) + 1 if isinstance(k, int) else [d * (x - 1) + 1 for x in k]
+        )  # actual kernel-size
     if p is None:
         p = k // 2 if isinstance(k, int) else [x // 2 for x in k]  # auto-pad
     return p
@@ -25,14 +44,23 @@ def autopad(k, p=None, d=1):  # kernel, padding, dilation
 
 class Conv(nn.Module):
     """Standard convolution with args(ch_in, ch_out, kernel, stride, padding, groups, dilation, activation)."""
+
     default_act = nn.SiLU()  # default activation
 
     def __init__(self, c1, c2, k=1, s=1, p=None, g=1, d=1, act=True):
         """Initialize Conv layer with given arguments including activation."""
         super().__init__()
-        self.conv = nn.Conv2d(c1, c2, k, s, autopad(k, p, d), groups=g, dilation=d, bias=False)
+        self.conv = nn.Conv2d(
+            c1, c2, k, s, autopad(k, p, d), groups=g, dilation=d, bias=False
+        )
         self.bn = nn.BatchNorm2d(c2)
-        self.act = self.default_act if act is True else act if isinstance(act, nn.Module) else nn.Identity()
+        self.act = (
+            self.default_act
+            if act is True
+            else act
+            if isinstance(act, nn.Module)
+            else nn.Identity()
+        )
 
     def forward(self, x):
         """Apply convolution, batch normalization and activation to input tensor."""
@@ -49,7 +77,9 @@ class Conv2(Conv):
     def __init__(self, c1, c2, k=3, s=1, p=None, g=1, d=1, act=True):
         """Initialize Conv layer with given arguments including activation."""
         super().__init__(c1, c2, k, s, p, g=g, d=d, act=act)
-        self.cv2 = nn.Conv2d(c1, c2, 1, s, autopad(1, p, d), groups=g, dilation=d, bias=False)  # add 1x1 conv
+        self.cv2 = nn.Conv2d(
+            c1, c2, 1, s, autopad(1, p, d), groups=g, dilation=d, bias=False
+        )  # add 1x1 conv
 
     def forward(self, x):
         """Apply convolution, batch normalization and activation to input tensor."""
@@ -63,9 +93,9 @@ class Conv2(Conv):
         """Fuse parallel convolutions."""
         w = torch.zeros_like(self.conv.weight.data)
         i = [x // 2 for x in w.shape[2:]]
-        w[:, :, i[0]:i[0] + 1, i[1]:i[1] + 1] = self.cv2.weight.data.clone()
+        w[:, :, i[0] : i[0] + 1, i[1] : i[1] + 1] = self.cv2.weight.data.clone()
         self.conv.weight.data += w
-        self.__delattr__('cv2')
+        self.__delattr__("cv2")
         self.forward = self.forward_fuse
 
 
@@ -90,7 +120,9 @@ class LightConv(nn.Module):
 class DWConv(Conv):
     """Depth-wise convolution."""
 
-    def __init__(self, c1, c2, k=1, s=1, d=1, act=True):  # ch_in, ch_out, kernel, stride, dilation, activation
+    def __init__(
+        self, c1, c2, k=1, s=1, d=1, act=True
+    ):  # ch_in, ch_out, kernel, stride, dilation, activation
         """Initialize Depth-wise convolution with given parameters."""
         super().__init__(c1, c2, k, s, g=math.gcd(c1, c2), d=d, act=act)
 
@@ -98,13 +130,16 @@ class DWConv(Conv):
 class DWConvTranspose2d(nn.ConvTranspose2d):
     """Depth-wise transpose convolution."""
 
-    def __init__(self, c1, c2, k=1, s=1, p1=0, p2=0):  # ch_in, ch_out, kernel, stride, padding, padding_out
+    def __init__(
+        self, c1, c2, k=1, s=1, p1=0, p2=0
+    ):  # ch_in, ch_out, kernel, stride, padding, padding_out
         """Initialize DWConvTranspose2d class with given parameters."""
         super().__init__(c1, c2, k, s, p1, p2, groups=math.gcd(c1, c2))
 
 
 class ConvTranspose(nn.Module):
     """Convolution transpose 2d layer."""
+
     default_act = nn.SiLU()  # default activation
 
     def __init__(self, c1, c2, k=2, s=2, p=0, bn=True, act=True):
@@ -112,7 +147,13 @@ class ConvTranspose(nn.Module):
         super().__init__()
         self.conv_transpose = nn.ConvTranspose2d(c1, c2, k, s, p, bias=not bn)
         self.bn = nn.BatchNorm2d(c2) if bn else nn.Identity()
-        self.act = self.default_act if act is True else act if isinstance(act, nn.Module) else nn.Identity()
+        self.act = (
+            self.default_act
+            if act is True
+            else act
+            if isinstance(act, nn.Module)
+            else nn.Identity()
+        )
 
     def forward(self, x):
         """Applies transposed convolutions, batch normalization and activation to input."""
@@ -138,7 +179,17 @@ class Focus(nn.Module):
 
         Input shape is (b,c,w,h) and output shape is (b,4c,w/2,h/2).
         """
-        return self.conv(torch.cat((x[..., ::2, ::2], x[..., 1::2, ::2], x[..., ::2, 1::2], x[..., 1::2, 1::2]), 1))
+        return self.conv(
+            torch.cat(
+                (
+                    x[..., ::2, ::2],
+                    x[..., 1::2, ::2],
+                    x[..., ::2, 1::2],
+                    x[..., 1::2, 1::2],
+                ),
+                1,
+            )
+        )
         # return self.conv(self.contract(x))
 
 
@@ -167,18 +218,29 @@ class RepConv(nn.Module):
     This module is used in RT-DETR.
     Based on https://github.com/DingXiaoH/RepVGG/blob/main/repvgg.py
     """
+
     default_act = nn.SiLU()  # default activation
 
-    def __init__(self, c1, c2, k=3, s=1, p=1, g=1, d=1, act=True, bn=False, deploy=False):
+    def __init__(
+        self, c1, c2, k=3, s=1, p=1, g=1, d=1, act=True, bn=False, deploy=False
+    ):
         """Initializes Light Convolution layer with inputs, outputs & optional activation function."""
         super().__init__()
         assert k == 3 and p == 1
         self.g = g
         self.c1 = c1
         self.c2 = c2
-        self.act = self.default_act if act is True else act if isinstance(act, nn.Module) else nn.Identity()
+        self.act = (
+            self.default_act
+            if act is True
+            else act
+            if isinstance(act, nn.Module)
+            else nn.Identity()
+        )
 
-        self.bn = nn.BatchNorm2d(num_features=c1) if bn and c2 == c1 and s == 1 else None
+        self.bn = (
+            nn.BatchNorm2d(num_features=c1) if bn and c2 == c1 and s == 1 else None
+        )
         self.conv1 = Conv(c1, c2, k, s, p=p, g=g, act=False)
         self.conv2 = Conv(c1, c2, 1, s, p=(p - k // 2), g=g, act=False)
 
@@ -196,7 +258,10 @@ class RepConv(nn.Module):
         kernel3x3, bias3x3 = self._fuse_bn_tensor(self.conv1)
         kernel1x1, bias1x1 = self._fuse_bn_tensor(self.conv2)
         kernelid, biasid = self._fuse_bn_tensor(self.bn)
-        return kernel3x3 + self._pad_1x1_to_3x3_tensor(kernel1x1) + kernelid, bias3x3 + bias1x1 + biasid
+        return (
+            kernel3x3 + self._pad_1x1_to_3x3_tensor(kernel1x1) + kernelid,
+            bias3x3 + bias1x1 + biasid,
+        )
 
     def _pad_1x1_to_3x3_tensor(self, kernel1x1):
         """Pads a 1x1 tensor to a 3x3 tensor."""
@@ -217,7 +282,7 @@ class RepConv(nn.Module):
             beta = branch.bn.bias
             eps = branch.bn.eps
         elif isinstance(branch, nn.BatchNorm2d):
-            if not hasattr(self, 'id_tensor'):
+            if not hasattr(self, "id_tensor"):
                 input_dim = self.c1 // self.g
                 kernel_value = np.zeros((self.c1, input_dim, 3, 3), dtype=np.float32)
                 for i in range(self.c1):
@@ -235,29 +300,31 @@ class RepConv(nn.Module):
 
     def fuse_convs(self):
         """Combines two convolution layers into a single layer and removes unused attributes from the class."""
-        if hasattr(self, 'conv'):
+        if hasattr(self, "conv"):
             return
         kernel, bias = self.get_equivalent_kernel_bias()
-        self.conv = nn.Conv2d(in_channels=self.conv1.conv.in_channels,
-                              out_channels=self.conv1.conv.out_channels,
-                              kernel_size=self.conv1.conv.kernel_size,
-                              stride=self.conv1.conv.stride,
-                              padding=self.conv1.conv.padding,
-                              dilation=self.conv1.conv.dilation,
-                              groups=self.conv1.conv.groups,
-                              bias=True).requires_grad_(False)
+        self.conv = nn.Conv2d(
+            in_channels=self.conv1.conv.in_channels,
+            out_channels=self.conv1.conv.out_channels,
+            kernel_size=self.conv1.conv.kernel_size,
+            stride=self.conv1.conv.stride,
+            padding=self.conv1.conv.padding,
+            dilation=self.conv1.conv.dilation,
+            groups=self.conv1.conv.groups,
+            bias=True,
+        ).requires_grad_(False)
         self.conv.weight.data = kernel
         self.conv.bias.data = bias
         for para in self.parameters():
             para.detach_()
-        self.__delattr__('conv1')
-        self.__delattr__('conv2')
-        if hasattr(self, 'nm'):
-            self.__delattr__('nm')
-        if hasattr(self, 'bn'):
-            self.__delattr__('bn')
-        if hasattr(self, 'id_tensor'):
-            self.__delattr__('id_tensor')
+        self.__delattr__("conv1")
+        self.__delattr__("conv2")
+        if hasattr(self, "nm"):
+            self.__delattr__("nm")
+        if hasattr(self, "bn"):
+            self.__delattr__("bn")
+        if hasattr(self, "id_tensor"):
+            self.__delattr__("id_tensor")
 
 
 class ChannelAttention(nn.Module):
@@ -281,14 +348,21 @@ class SpatialAttention(nn.Module):
     def __init__(self, kernel_size=7):
         """Initialize Spatial-attention module with kernel size argument."""
         super().__init__()
-        assert kernel_size in (3, 7), 'kernel size must be 3 or 7'
+        assert kernel_size in (3, 7), "kernel size must be 3 or 7"
         padding = 3 if kernel_size == 7 else 1
         self.cv1 = nn.Conv2d(2, 1, kernel_size, padding=padding, bias=False)
         self.act = nn.Sigmoid()
 
     def forward(self, x):
         """Apply channel and spatial attention on input for feature recalibration."""
-        return x * self.act(self.cv1(torch.cat([torch.mean(x, 1, keepdim=True), torch.max(x, 1, keepdim=True)[0]], 1)))
+        return x * self.act(
+            self.cv1(
+                torch.cat(
+                    [torch.mean(x, 1, keepdim=True), torch.max(x, 1, keepdim=True)[0]],
+                    1,
+                )
+            )
+        )
 
 
 class CBAM(nn.Module):
@@ -319,18 +393,41 @@ class Concat(nn.Module):
 
 
 # DSConv
-class DSConv(_ConvNd):  #https://arxiv.org/pdf/1901.01928v1.pdf
-    def __init__(self, in_channels, out_channels, kernel_size, stride=1,
-                 padding=None, dilation=1, groups=1, padding_mode='zeros', bias=False, block_size=32, KDSBias=False, CDS=False):
+class DSConv(_ConvNd):  # https://arxiv.org/pdf/1901.01928v1.pdf
+    def __init__(
+        self,
+        in_channels,
+        out_channels,
+        kernel_size,
+        stride=1,
+        padding=None,
+        dilation=1,
+        groups=1,
+        padding_mode="zeros",
+        bias=False,
+        block_size=32,
+        KDSBias=False,
+        CDS=False,
+    ):
         padding = _pair(autopad(kernel_size, padding, dilation))
         kernel_size = _pair(kernel_size)
         stride = _pair(stride)
         dilation = _pair(dilation)
 
-        blck_numb = math.ceil(((in_channels)/(block_size*groups)))
+        blck_numb = math.ceil(((in_channels) / (block_size * groups)))
         super(DSConv, self).__init__(
-            in_channels, out_channels, kernel_size, stride, padding, dilation,
-            False, _pair(0), groups, bias, padding_mode)
+            in_channels,
+            out_channels,
+            kernel_size,
+            stride,
+            padding,
+            dilation,
+            False,
+            _pair(0),
+            groups,
+            bias,
+            padding_mode,
+        )
 
         # KDS weight From Paper
         self.intweight = torch.Tensor(out_channels, in_channels, *kernel_size)
@@ -359,23 +456,23 @@ class DSConv(_ConvNd):  #https://arxiv.org/pdf/1901.01928v1.pdf
         # Handy definitions:
         nmb_blocks = self.alpha.shape[1]
         total_depth = self.weight.shape[1]
-        bs = total_depth//nmb_blocks
+        bs = total_depth // nmb_blocks
 
-        llb = total_depth-(nmb_blocks-1)*bs
+        llb = total_depth - (nmb_blocks - 1) * bs
 
         # Casting the Alpha values as same tensor shape as weight
         for i in range(nmb_blocks):
-            length_blk = llb if i==nmb_blocks-1 else bs
+            length_blk = llb if i == nmb_blocks - 1 else bs
 
-            shp = self.alpha.shape # Notice this is the same shape for the bias as well
-            to_repeat=self.alpha[:, i, ...].view(shp[0],1,shp[2],shp[3]).clone()
+            shp = self.alpha.shape  # Notice this is the same shape for the bias as well
+            to_repeat = self.alpha[:, i, ...].view(shp[0], 1, shp[2], shp[3]).clone()
             repeated = to_repeat.expand(shp[0], length_blk, shp[2], shp[3]).clone()
-            alpha_res[:, i*bs:(i*bs+length_blk), ...] = repeated.clone()
+            alpha_res[:, i * bs : (i * bs + length_blk), ...] = repeated.clone()
 
             if self.KDSBias:
                 to_repeat = self.KDSb[:, i, ...].view(shp[0], 1, shp[2], shp[3]).clone()
                 repeated = to_repeat.expand(shp[0], length_blk, shp[2], shp[3]).clone()
-                KDSBias_res[:, i*bs:(i*bs+length_blk), ...] = repeated.clone()
+                KDSBias_res[:, i * bs : (i * bs + length_blk), ...] = repeated.clone()
 
         if self.CDS:
             to_repeat = self.CDSw.view(-1, 1, 1, 1)
@@ -390,21 +487,31 @@ class DSConv(_ConvNd):  #https://arxiv.org/pdf/1901.01928v1.pdf
 
     def forward(self, input):
         # Get resulting weight
-        #weight_res = self.get_weight_res()
+        # weight_res = self.get_weight_res()
 
         # Returning convolution
-        return F.conv2d(input, self.weight, self.bias,
-                            self.stride, self.padding, self.dilation,
-                            self.groups)
+        return F.conv2d(
+            input,
+            self.weight,
+            self.bias,
+            self.stride,
+            self.padding,
+            self.dilation,
+            self.groups,
+        )
+
 
 class DSConv2D(Conv):
     def __init__(self, inc, ouc, k=1, s=1, p=None, g=1, d=1, act=True):
         super().__init__(inc, ouc, k, s, p, g, d, act)
         self.conv = DSConv(inc, ouc, k, s, p, g, d)
 
+
 class Bottleneck_DSConv2D(nn.Module):
     # Standard bottleneck
-    def __init__(self, c1, c2, shortcut=True, g=1, e=0.5):  # ch_in, ch_out, shortcut, groups, expansion
+    def __init__(
+        self, c1, c2, shortcut=True, g=1, e=0.5
+    ):  # ch_in, ch_out, shortcut, groups, expansion
         super().__init__()
         c_ = int(c2 * e)  # hidden channels
         self.cv1 = DSConv2D(c1, c_, 1, 1)
@@ -414,15 +521,286 @@ class Bottleneck_DSConv2D(nn.Module):
     def forward(self, x):
         return x + self.cv2(self.cv1(x)) if self.add else self.cv2(self.cv1(x))
 
+
 class C2f_DSConv2D(nn.Module):
-    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):  # ch_in, ch_out, number, shortcut, groups, expansion
+    def __init__(
+        self, c1, c2, n=1, shortcut=False, g=1, e=0.5
+    ):  # ch_in, ch_out, number, shortcut, groups, expansion
         super().__init__()
         self.c = int(c2 * e)  # hidden channels
         self.cv1 = Conv(c1, 2 * self.c, 1, 1)
         self.cv2 = Conv((2 + n) * self.c, c2, 1)  # optional act=FReLU(c2)
-        self.m = nn.ModuleList(Bottleneck_DSConv2D(self.c , self.c , shortcut, g, e=1.0) for _ in range(n))
+        self.m = nn.ModuleList(
+            Bottleneck_DSConv2D(self.c, self.c, shortcut, g, e=1.0) for _ in range(n)
+        )
 
     def forward(self, x):
         y = list(self.cv1(x).chunk(2, 1))
         y.extend(m(y[-1]) for m in self.m)
         return self.cv2(torch.cat(y, 1))
+
+
+class PConv2d(nn.Module):
+    def __init__(
+        self, in_channels, kernel_size=3, n_div: int = 4, forward: str = "split_cat"
+    ):
+        super(PConv2d, self).__init__()
+        assert in_channels > 4, "in_channels should > 4, but got {} instead.".format(
+            in_channels
+        )
+        self.dim_conv = in_channels // n_div
+        self.dim_untouched = in_channels - self.dim_conv
+
+        self.conv = nn.Conv2d(
+            in_channels=self.dim_conv,
+            out_channels=self.dim_conv,
+            kernel_size=kernel_size,
+            stride=1,
+            padding=(kernel_size - 1) // 2,
+            bias=False,
+        )
+
+        if forward == "slicing":
+            self.forward = self.forward_slicing
+
+        elif forward == "split_cat":
+            self.forward = self.forward_split_cat
+
+        else:
+            raise NotImplementedError(
+                "forward method: {} is not implemented.".format(forward)
+            )
+
+    def forward_slicing(self, x: Tensor) -> Tensor:
+        x[:, : self.dim_conv, :, :] = self.conv(x[:, : self.dim_conv, :, :])
+
+        return x
+
+    def forward_split_cat(self, x: Tensor) -> Tensor:
+        x1, x2 = torch.split(x, [self.dim_conv, self.dim_untouched], dim=1)
+        x1 = self.conv(x1)
+        x = torch.cat((x1, x2), dim=1)
+
+        return x
+
+
+class ConvBNLayer(nn.Module):
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int = 1,
+        stride: int = 1,
+        padding: int = 0,
+        dilation: int = 1,
+        bias: bool = False,
+        act: str = "ReLU",
+    ):
+        super(ConvBNLayer, self).__init__()
+        assert act in ("ReLU", "GELU")
+        self.conv = nn.Conv2d(
+            in_channels, out_channels, kernel_size, stride, padding, dilation, bias=bias
+        )
+        self.bn = nn.BatchNorm2d(out_channels)
+        self.act = getattr(nn, act)()
+
+    def _fuse_bn_tensor(self) -> None:
+        kernel = self.conv.weight
+        bias = (
+            self.conv.bias
+            if hasattr(self.conv, "bias") and self.conv.bias is not None
+            else 0
+        )
+        running_mean = self.bn.running_mean
+        running_var = self.bn.running_var
+        gamma = self.bn.weight
+        beta = self.bn.bias
+        eps = self.bn.eps
+        std = (running_var + eps).sqrt()
+        t = (gamma / std).reshape(-1, 1, 1, 1)
+        self.conv.weight.data = kernel * t
+        self.conv.bias = nn.Parameter(
+            beta - (running_mean - bias) * gamma / std, requires_grad=False
+        )
+        self.bn = nn.Identity()
+        return self.conv.weight.data, self.conv.bias.data
+
+    def forward(self, x: Tensor) -> Tensor:
+        x = self.conv(x)
+        x = self.bn(x)
+        x = self.act(x)
+
+        return x
+
+
+class FasterNetBlock(nn.Module):
+    def __init__(
+        self,
+        in_channels: int,
+        inner_channels: int = None,
+        kernel_size: int = 3,
+        bias=False,
+        act: str = "ReLU",
+        n_div: int = 4,
+        forward: str = "split_cat",
+        drop_path: float = 0.0,
+    ):
+        super(FasterNetBlock, self).__init__()
+        inner_channels = inner_channels or in_channels * 2
+        self.conv1 = PConv2d(in_channels, kernel_size, n_div, forward)
+        self.conv2 = ConvBNLayer(in_channels, inner_channels, bias=bias, act=act)
+        self.conv3 = nn.Conv2d(
+            inner_channels, in_channels, kernel_size=1, stride=1, bias=False
+        )
+        self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
+
+    def forward(self, x: Tensor) -> Tensor:
+        y = self.conv1(x)
+        y = self.conv2(y)
+        y = self.conv3(y)
+
+        return x + self.drop_path(y)
+
+
+class FasterNet(nn.Module):
+    def __init__(
+        self,
+        in_channels=3,
+        out_channels=1000,
+        last_channels=1280,
+        inner_channels: list = [40, 80, 160, 320],
+        blocks: list = [1, 2, 8, 2],
+        bias=False,
+        act="ReLU",
+        n_div=4,
+        forward="slicing",
+        drop_path=0.0,
+    ):
+        super(FasterNet, self).__init__()
+        self.embedding = ConvBNLayer(
+            in_channels, inner_channels[0], kernel_size=4, stride=4, bias=bias
+        )
+
+        self.stage1 = nn.Sequential(
+            OrderedDict(
+                [
+                    (
+                        "block{}".format(idx),
+                        FasterNetBlock(
+                            inner_channels[0],
+                            bias=bias,
+                            act=act,
+                            n_div=n_div,
+                            forward=forward,
+                            drop_path=drop_path,
+                        ),
+                    )
+                    for idx in range(blocks[0])
+                ]
+            )
+        )
+
+        self.merging1 = ConvBNLayer(
+            inner_channels[0], inner_channels[1], kernel_size=2, stride=2, bias=bias
+        )
+
+        self.stage2 = nn.Sequential(
+            OrderedDict(
+                [
+                    (
+                        "block{}".format(idx),
+                        FasterNetBlock(
+                            inner_channels[1],
+                            bias=bias,
+                            act=act,
+                            n_div=n_div,
+                            forward=forward,
+                            drop_path=drop_path,
+                        ),
+                    )
+                    for idx in range(blocks[1])
+                ]
+            )
+        )
+
+        self.merging2 = ConvBNLayer(
+            inner_channels[1], inner_channels[2], kernel_size=2, stride=2, bias=bias
+        )
+
+        self.stage3 = nn.Sequential(
+            OrderedDict(
+                [
+                    (
+                        "block{}".format(idx),
+                        FasterNetBlock(
+                            inner_channels[2],
+                            bias=bias,
+                            act=act,
+                            n_div=n_div,
+                            forward=forward,
+                            drop_path=drop_path,
+                        ),
+                    )
+                    for idx in range(blocks[2])
+                ]
+            )
+        )
+
+        self.merging3 = ConvBNLayer(
+            inner_channels[2], inner_channels[3], kernel_size=2, stride=2, bias=bias
+        )
+
+        self.stage4 = nn.Sequential(
+            OrderedDict(
+                [
+                    (
+                        "block{}".format(idx),
+                        FasterNetBlock(
+                            inner_channels[3],
+                            bias=bias,
+                            act=act,
+                            n_div=n_div,
+                            forward=forward,
+                            drop_path=drop_path,
+                        ),
+                    )
+                    for idx in range(blocks[3])
+                ]
+            )
+        )
+
+        self.classifier = nn.Sequential(
+            OrderedDict(
+                [
+                    ("global_average_pooling", nn.AdaptiveAvgPool2d(1)),
+                    (
+                        "conv",
+                        nn.Conv2d(
+                            inner_channels[-1], last_channels, kernel_size=1, bias=False
+                        ),
+                    ),
+                    ("act", getattr(nn, act)()),
+                    ("flat", nn.Flatten()),
+                    ("fc", nn.Linear(last_channels, out_channels, bias=True)),
+                ]
+            )
+        )
+        self.feature_channels = inner_channels
+
+    def fuse_bn_tensor(self):
+        for m in self.modules():
+            if isinstance(m, ConvBNLayer):
+                m._fuse_bn_tensor()
+
+    def forward_feature(self, x: Tensor) -> List[Tensor]:
+        x1 = self.stage1(self.embedding(x))
+        x2 = self.stage2(self.merging1(x1))
+        x3 = self.stage3(self.merging2(x2))
+        x4 = self.stage4(self.merging3(x3))
+        return [x1, x2, x3, x4]
+
+    def forward(self, x: Tensor) -> Tensor:
+        _, _, _, x = self.forward_feature(x)
+        x = self.classifier(x)
+
+        return x
